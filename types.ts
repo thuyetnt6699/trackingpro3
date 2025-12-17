@@ -4,6 +4,7 @@ export interface User {
   id: string;
   email: string;
   role: UserRole;
+  passwordHash?: string; // Stores the encrypted/hashed password
 }
 
 export interface Carrier {
@@ -21,6 +22,13 @@ export type TrackingStatus =
   | 'exception' 
   | 'expired';
 
+export interface TrackingEvent {
+  date: string;
+  status: string;
+  detail: string;
+  location: string;
+}
+
 export interface TrackingInfo {
   id: string; // Internal UUID
   trackingNumber: string;
@@ -29,7 +37,7 @@ export interface TrackingInfo {
   lastUpdate: string;
   description: string;
   addedAt: number;
-  events?: any[];
+  events?: TrackingEvent[];
 }
 
 // TrackingMore API Response Shape (Simplified)

@@ -1,4 +1,4 @@
-import { TrackingInfo } from '../types';
+import { TrackingInfo, TrackingEvent } from '../types';
 import { TRACKING_MORE_API_KEY } from '../constants';
 
 const BASE_URL = 'https://api.trackingmore.com/v4';
@@ -28,7 +28,8 @@ export const TrackingApi = {
     const cleanCarrier = carrierCode.trim();
 
     const commonHeaders = {
-      'Tracking-Api-Key': TRACKING_MORE_API_KEY
+      'Tracking-Api-Key': TRACKING_MORE_API_KEY,
+      'Accept': 'application/json'
     };
 
     const postHeaders = {
@@ -51,10 +52,21 @@ export const TrackingApi = {
         const json = await response.json();
         if (json.meta?.code === 200 && json.data) {
            const data = json.data;
+           
+           // Map events if available
+           const items = data.items || [];
+           const events: TrackingEvent[] = items.map((e: any) => ({
+             date: e.checkpoint_date,
+             status: e.checkpoint_delivery_status,
+             detail: e.tracking_detail,
+             location: e.location
+           }));
+
            return {
              status: mapTrackingMoreStatus(data.delivery_status),
              lastUpdate: data.updated_at || new Date().toISOString(),
-             description: data.latest_event || `Status: ${data.delivery_status}`
+             description: data.latest_event || `Status: ${data.delivery_status}`,
+             events: events
            };
         }
       }
@@ -89,8 +101,6 @@ export const TrackingApi = {
     }
 
     // Step B: Get the tracking info
-    // We remove carrier_code from the query params to avoid "Field name invalid" errors in some cases.
-    // The tracking number itself is the primary identifier.
     const getRes = await fetch(`${BASE_URL}/trackings/get?tracking_numbers=${encodeURIComponent(cleanTrackingNum)}`, {
       method: 'GET',
       headers: commonHeaders 
@@ -116,10 +126,23 @@ export const TrackingApi = {
       // Find the one matching our carrier if possible, or just take the first one
       const data = getJson.data.find((d: any) => d.carrier_code === cleanCarrier) || getJson.data[0];
       
+      // Extract events from origin_info (common for China shipments) or destination_info
+      const rawEvents = data.origin_info?.trackinfo || data.destination_info?.trackinfo || [];
+      
+      const events: TrackingEvent[] = rawEvents.map((e: any) => ({
+        date: e.checkpoint_date,
+        status: e.checkpoint_delivery_status,
+        detail: e.tracking_detail,
+        location: e.location
+      })).sort((a: TrackingEvent, b: TrackingEvent) => 
+        new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+
       return {
         status: mapTrackingMoreStatus(data.delivery_status),
         lastUpdate: data.updated_at || new Date().toISOString(),
-        description: data.latest_event || `Status: ${data.delivery_status}`
+        description: data.latest_event || `Status: ${data.delivery_status}`,
+        events: events
       };
     }
 

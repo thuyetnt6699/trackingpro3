@@ -15,18 +15,35 @@ const hashPassword = (password: string): string => {
   return btoa(salt + password); 
 };
 
-// Initial Admin setup if empty
+// Initial Admin setup
+// This ensures the admin user always exists and has the correct credentials
 const setupInitialData = () => {
   const usersStr = localStorage.getItem(KEYS.USERS);
-  if (!usersStr) {
-    const adminUser: User = { 
+  let users: User[] = usersStr ? JSON.parse(usersStr) : [];
+  
+  const adminEmail = 'admin@test.com';
+  // FIX: Set password back to 'admin123' as requested
+  const adminPass = 'admin123'; 
+  const adminHash = hashPassword(adminPass);
+
+  const adminIndex = users.findIndex(u => u.email === adminEmail);
+
+  if (adminIndex === -1) {
+    // Create admin if not exists
+    users.push({ 
       id: '1', 
-      email: 'admin@test.com', 
+      email: adminEmail, 
       role: 'admin',
-      passwordHash: hashPassword('admin123') // Default password: admin123
-    };
-    localStorage.setItem(KEYS.USERS, JSON.stringify([adminUser]));
+      passwordHash: adminHash
+    });
+  } else {
+    // FORCE UPDATE: Reset admin password and role to defaults on reload.
+    // This fixes the issue where Vercel/Localhost stores old data/passwords.
+    users[adminIndex].passwordHash = adminHash;
+    users[adminIndex].role = 'admin';
   }
+
+  localStorage.setItem(KEYS.USERS, JSON.stringify(users));
 };
 
 setupInitialData();

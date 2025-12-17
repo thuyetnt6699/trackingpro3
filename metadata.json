@@ -1,0 +1,5 @@
+{
+  "name": "ChinaTrack Pro",
+  "description": "A streamlined tracking application for Chinese domestic shipments using TrackingMore API. Features tracking management, status visualization, and admin controls.",
+  "requestFramePermissions": []
+}

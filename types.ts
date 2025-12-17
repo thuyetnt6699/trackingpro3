@@ -38,6 +38,7 @@ export interface TrackingInfo {
   description: string;
   addedAt: number;
   events?: TrackingEvent[];
+  deletedAt?: number; // Timestamp when item was moved to trash. If undefined, item is active.
 }
 
 // TrackingMore API Response Shape (Simplified)

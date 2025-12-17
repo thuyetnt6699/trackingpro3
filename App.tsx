@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { User, TrackingInfo, UserRole } from './types';
 import { StorageService } from './services/storage';
 import { TrackingApi } from './services/trackingApi';
 import { CHINA_CARRIERS } from './constants';
 import { Button } from './components/Button';
 import { TrackingCard } from './components/TrackingCard';
+import { ConfirmationModal } from './components/ConfirmationModal';
+import { Badge } from './components/Badge';
 import { 
   LogOut, 
   Plus, 
@@ -21,7 +23,11 @@ import {
   Trash2,
   Shield,
   User as UserIcon,
-  ArrowLeft
+  ArrowLeft,
+  RotateCcw,
+  CheckSquare,
+  Square,
+  X
 } from 'lucide-react';
 
 function App() {
@@ -33,12 +39,15 @@ function App() {
   const [authError, setAuthError] = useState('');
 
   // App View State
-  const [currentView, setCurrentView] = useState<'dashboard' | 'admin'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'admin' | 'trash'>('dashboard');
 
   // App Data State
   const [trackings, setTrackings] = useState<TrackingInfo[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]); // For Admin Panel
   
+  // Trash Selection State
+  const [selectedTrashIds, setSelectedTrashIds] = useState<Set<string>>(new Set());
+
   // Form Inputs
   const [newTrackingNum, setNewTrackingNum] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState(CHINA_CARRIERS[0].code);
@@ -48,6 +57,21 @@ function App() {
   
   // Form Error State
   const [addError, setAddError] = useState('');
+
+  // Delete Confirmation State
+  const [deleteModal, setDeleteModal] = useState<{
+    isOpen: boolean;
+    type: 'user' | 'tracking_soft' | 'tracking_permanent' | null;
+    id: string | null;
+    title: string;
+    message: string;
+  }>({
+    isOpen: false,
+    type: null,
+    id: null,
+    title: '',
+    message: ''
+  });
 
   // Load initial data
   useEffect(() => {
@@ -65,6 +89,10 @@ function App() {
       setAllUsers(StorageService.getUsers());
     }
   }, [currentView, user]);
+
+  // Derived State
+  const activeTrackings = useMemo(() => trackings.filter(t => !t.deletedAt), [trackings]);
+  const trashedTrackings = useMemo(() => trackings.filter(t => t.deletedAt).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)), [trackings]);
 
   // --- Auth Handlers ---
 
@@ -121,6 +149,110 @@ function App() {
     StorageService.setRegistrationEnabled(newState);
   };
 
+  // --- Trash & Restore Logic ---
+
+  const toggleTrashSelection = (id: string) => {
+    const newSet = new Set(selectedTrashIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedTrashIds(newSet);
+  };
+
+  const toggleSelectAllTrash = () => {
+    if (selectedTrashIds.size === trashedTrackings.length) {
+      setSelectedTrashIds(new Set());
+    } else {
+      setSelectedTrashIds(new Set(trashedTrackings.map(t => t.id)));
+    }
+  };
+
+  const restoreTracking = (ids: string[]) => {
+    const updatedList = trackings.map(t => {
+      if (ids.includes(t.id)) {
+        return { ...t, deletedAt: undefined };
+      }
+      return t;
+    });
+    setTrackings(updatedList);
+    StorageService.saveTrackings(updatedList);
+    setSelectedTrashIds(new Set()); // Clear selection
+  };
+
+  const restoreAll = () => {
+    const updatedList = trackings.map(t => ({ ...t, deletedAt: undefined }));
+    setTrackings(updatedList);
+    StorageService.saveTrackings(updatedList);
+    setSelectedTrashIds(new Set());
+  };
+
+  // --- Delete Logic with Modal ---
+
+  const initiateDeleteUser = (userId: string) => {
+    if (userId === user?.id) return;
+    setDeleteModal({
+      isOpen: true,
+      type: 'user',
+      id: userId,
+      title: 'Delete User Account',
+      message: 'Are you sure you want to permanently delete this user? They will no longer be able to sign in. This action cannot be undone.'
+    });
+  };
+
+  const initiateSoftDeleteTracking = (trackingId: string) => {
+    const item = trackings.find(t => t.id === trackingId);
+    setDeleteModal({
+      isOpen: true,
+      type: 'tracking_soft',
+      id: trackingId,
+      title: 'Move to Trash',
+      message: `Are you sure you want to move tracking ${item?.trackingNumber} to the trash? You can restore it later.`
+    });
+  };
+
+  const initiatePermanentDeleteTracking = (trackingId: string) => {
+    const item = trackings.find(t => t.id === trackingId);
+    setDeleteModal({
+      isOpen: true,
+      type: 'tracking_permanent',
+      id: trackingId,
+      title: 'Permanently Delete',
+      message: `This will permanently delete tracking ${item?.trackingNumber}. This action cannot be undone.`
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    const { type, id } = deleteModal;
+    if (!id || !type) return;
+
+    if (type === 'user') {
+      StorageService.deleteUser(id);
+      setAllUsers(StorageService.getUsers());
+    } else if (type === 'tracking_soft') {
+      // Soft Delete: Set deletedAt
+      const updatedList = trackings.map(t => 
+        t.id === id ? { ...t, deletedAt: Date.now() } : t
+      );
+      setTrackings(updatedList);
+      StorageService.saveTrackings(updatedList);
+    } else if (type === 'tracking_permanent') {
+      // Hard Delete: Remove from array
+      const updatedList = trackings.filter(t => t.id !== id);
+      setTrackings(updatedList);
+      StorageService.saveTrackings(updatedList);
+      // Remove from selection if present
+      if (selectedTrashIds.has(id)) {
+        const newSet = new Set(selectedTrashIds);
+        newSet.delete(id);
+        setSelectedTrashIds(newSet);
+      }
+    }
+
+    setDeleteModal(prev => ({ ...prev, isOpen: false }));
+  };
+
   // --- Admin User Management Handlers ---
 
   const handlePromoteDemote = (targetUser: User) => {
@@ -133,14 +265,6 @@ function App() {
     setAllUsers(StorageService.getUsers()); // Refresh list
   };
 
-  const handleDeleteUser = (userId: string) => {
-    if (userId === user?.id) return; // Cannot delete self
-    if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) return;
-    
-    StorageService.deleteUser(userId);
-    setAllUsers(StorageService.getUsers()); // Refresh list
-  };
-
   // --- Tracking Handlers ---
 
   const addTracking = async (e: React.FormEvent) => {
@@ -150,9 +274,17 @@ function App() {
     if (!newTrackingNum) return;
     const normalizedNum = newTrackingNum.trim();
     
-    const exists = trackings.some(t => t.trackingNumber === normalizedNum);
-    if (exists) {
-      setAddError(`Tracking number ${normalizedNum} already exists in your list.`);
+    // Check if exists in Active list
+    const existsActive = activeTrackings.some(t => t.trackingNumber === normalizedNum);
+    if (existsActive) {
+      setAddError(`Tracking number ${normalizedNum} is already in your dashboard.`);
+      return;
+    }
+
+    // Check if exists in Trash list (Prevent duplicates in trash/restore issues)
+    const existsTrash = trashedTrackings.some(t => t.trackingNumber === normalizedNum);
+    if (existsTrash) {
+      setAddError(`Tracking number ${normalizedNum} is currently in the Trash. Please restore it from there.`);
       return;
     }
 
@@ -185,7 +317,8 @@ function App() {
   const refreshAll = async () => {
     setIsLoading(true);
     try {
-      const promises = trackings.map(async (item) => {
+      // Only refresh active trackings
+      const promises = activeTrackings.map(async (item) => {
         try {
           const updates = await TrackingApi.getStatus(item.trackingNumber, item.carrierCode);
           return { ...item, ...updates };
@@ -195,18 +328,24 @@ function App() {
         }
       });
 
-      const updatedList = await Promise.all(promises);
+      const updatedActive = await Promise.all(promises);
+      
+      // Merge updated active items with existing trashed items
+      // Ensure we don't duplicate logic, keep original array structure but update content
+      const updatedMap = new Map(updatedActive.map(i => [i.id, i]));
+      
+      const updatedList = trackings.map(t => {
+        if (updatedMap.has(t.id)) {
+          return updatedMap.get(t.id)!;
+        }
+        return t;
+      });
+      
       setTrackings(updatedList);
       StorageService.saveTrackings(updatedList);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const deleteTracking = (id: string) => {
-    const updatedList = trackings.filter(t => t.id !== id);
-    setTrackings(updatedList);
-    StorageService.saveTrackings(updatedList);
   };
 
   // --- Render Login Screen ---
@@ -282,7 +421,7 @@ function App() {
   }
 
   // Filter Logic for Dashboard
-  const filteredTrackings = trackings.filter(t => {
+  const filteredActiveTrackings = activeTrackings.filter(t => {
     if (filterStatus === 'all') return true;
     return t.status === filterStatus;
   }).sort((a, b) => {
@@ -291,7 +430,7 @@ function App() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 relative">
       {/* Header */}
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -303,31 +442,44 @@ function App() {
           </div>
           
           <div className="flex items-center gap-4">
-            {/* Admin Toggle View Button */}
+            
+            {/* Nav: Admin */}
             {user.role === 'admin' && (
-              <div className="flex items-center gap-2 border-r border-gray-200 pr-4">
-                <button
-                  onClick={() => setCurrentView(currentView === 'dashboard' ? 'admin' : 'dashboard')}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${currentView === 'admin' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-                >
-                  {currentView === 'dashboard' ? (
-                    <>
-                      <Users className="w-4 h-4" />
-                      Admin Panel
-                    </>
-                  ) : (
-                    <>
-                      <ArrowLeft className="w-4 h-4" />
-                      Dashboard
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                onClick={() => setCurrentView('admin')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${currentView === 'admin' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">Admin</span>
+              </button>
             )}
 
-            <div className="text-right hidden sm:block">
+            {/* Nav: Trash */}
+            <button
+              onClick={() => setCurrentView('trash')}
+              className={`relative flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${currentView === 'trash' ? 'bg-red-100 text-red-700' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              <Trash2 className="w-4 h-4" />
+              <span className="hidden sm:inline">Trash</span>
+              {trashedTrackings.length > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
+                  {trashedTrackings.length}
+                </span>
+              )}
+            </button>
+
+            {/* Nav: Dashboard (if not active) */}
+            {currentView !== 'dashboard' && (
+              <button
+                onClick={() => setCurrentView('dashboard')}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors sm:hidden"
+              >
+                <LayoutDashboard className="w-4 h-4" />
+              </button>
+            )}
+
+            <div className="text-right hidden sm:block border-l border-gray-200 pl-4">
               <p className="text-sm font-medium text-gray-900">{user.email}</p>
-              <p className="text-xs text-gray-500 capitalize">{user.role}</p>
             </div>
             
             <Button variant="ghost" onClick={handleLogout} className="!p-2">
@@ -340,8 +492,8 @@ function App() {
       {/* Main Content Area */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         
-        {/* --- View: Admin Panel --- */}
-        {currentView === 'admin' && user.role === 'admin' ? (
+        {/* === View: Admin Panel === */}
+        {currentView === 'admin' && user.role === 'admin' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
@@ -404,7 +556,7 @@ function App() {
                             </button>
                             <span className="text-gray-300">|</span>
                             <button
-                              onClick={() => handleDeleteUser(u.id)}
+                              onClick={() => initiateDeleteUser(u.id)}
                               disabled={u.id === user.id}
                               className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                               title="Delete User"
@@ -420,8 +572,136 @@ function App() {
               </div>
             </div>
           </div>
-        ) : (
-          /* --- View: Dashboard (Original Content) --- */
+        )}
+
+        {/* === View: Trash === */}
+        {currentView === 'trash' && (
+           <div className="space-y-6">
+             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                    <Trash2 className="w-6 h-6 text-red-500" />
+                    Recycle Bin
+                  </h2>
+                  <p className="text-gray-500 mt-1">
+                    Recover deleted shipments or permanently remove them.
+                  </p>
+                </div>
+                
+                {trashedTrackings.length > 0 && (
+                  <Button variant="secondary" onClick={restoreAll} className="gap-2">
+                    <RotateCcw className="w-4 h-4" />
+                    Restore All
+                  </Button>
+                )}
+             </div>
+
+             {/* Bulk Actions Bar */}
+             {selectedTrashIds.size > 0 && (
+               <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center gap-2 text-blue-800 font-medium text-sm">
+                    <CheckSquare className="w-4 h-4" />
+                    {selectedTrashIds.size} items selected
+                  </div>
+                  <div className="flex items-center gap-2">
+                     <button 
+                       onClick={() => restoreTracking(Array.from(selectedTrashIds))}
+                       className="text-sm bg-white border border-blue-200 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors font-medium flex items-center gap-1"
+                     >
+                       <RotateCcw className="w-3.5 h-3.5" />
+                       Restore Selected
+                     </button>
+                  </div>
+               </div>
+             )}
+
+             {trashedTrackings.length > 0 ? (
+               <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <table className="w-full text-left text-sm text-gray-600">
+                    <thead className="bg-gray-50 text-gray-900 font-semibold border-b border-gray-200">
+                      <tr>
+                        <th className="w-12 px-6 py-4">
+                          <button onClick={toggleSelectAllTrash} className="flex items-center text-gray-400 hover:text-gray-600">
+                            {selectedTrashIds.size === trashedTrackings.length && trashedTrackings.length > 0 ? (
+                              <CheckSquare className="w-5 h-5 text-blue-600" />
+                            ) : (
+                              <Square className="w-5 h-5" />
+                            )}
+                          </button>
+                        </th>
+                        <th className="px-4 py-4">Tracking Number</th>
+                        <th className="px-4 py-4 hidden sm:table-cell">Carrier</th>
+                        <th className="px-4 py-4 hidden sm:table-cell">Status</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {trashedTrackings.map((item) => {
+                        const isSelected = selectedTrashIds.has(item.id);
+                        return (
+                          <tr key={item.id} className={`hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50/30' : ''}`}>
+                            <td className="px-6 py-4">
+                              <button 
+                                onClick={() => toggleTrashSelection(item.id)}
+                                className="flex items-center"
+                              >
+                                {isSelected ? (
+                                  <CheckSquare className="w-5 h-5 text-blue-600" />
+                                ) : (
+                                  <Square className="w-5 h-5 text-gray-300 hover:text-gray-400" />
+                                )}
+                              </button>
+                            </td>
+                            <td className="px-4 py-4 font-medium text-gray-900">
+                              {item.trackingNumber}
+                            </td>
+                            <td className="px-4 py-4 hidden sm:table-cell">
+                              {CHINA_CARRIERS.find(c => c.code === item.carrierCode)?.name || item.carrierCode}
+                            </td>
+                            <td className="px-4 py-4 hidden sm:table-cell">
+                               <Badge status={item.status} />
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => restoreTracking([item.id])}
+                                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                  title="Restore"
+                                >
+                                  <RotateCcw className="w-4 h-4" />
+                                  <span className="hidden sm:inline">Restore</span>
+                                </button>
+                                <span className="text-gray-200">|</span>
+                                <button
+                                  onClick={() => initiatePermanentDeleteTracking(item.id)}
+                                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded transition-colors"
+                                  title="Delete Forever"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  <span className="hidden sm:inline">Delete</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+               </div>
+             ) : (
+                <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200">
+                  <div className="bg-gray-50 p-4 rounded-full inline-block mb-4">
+                    <Trash2 className="w-8 h-8 text-gray-400" />
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900">Trash is empty</h3>
+                  <p className="text-gray-500 mt-1">Items moved to trash will appear here.</p>
+                </div>
+             )}
+           </div>
+        )}
+
+        {/* === View: Dashboard === */}
+        {currentView === 'dashboard' && (
           <>
             {/* Add Tracking Section */}
             <section className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -499,12 +779,12 @@ function App() {
 
             {/* Tracking List */}
             <div className="space-y-4">
-              {filteredTrackings.length > 0 ? (
-                filteredTrackings.map(item => (
+              {filteredActiveTrackings.length > 0 ? (
+                filteredActiveTrackings.map(item => (
                   <TrackingCard 
                     key={item.id} 
                     item={item} 
-                    onDelete={deleteTracking}
+                    onDelete={initiateSoftDeleteTracking} // Use Soft Delete here
                     isAdmin={true}
                   />
                 ))
@@ -521,6 +801,16 @@ function App() {
           </>
         )}
       </main>
+
+      {/* Global Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={handleConfirmDelete}
+        title={deleteModal.title}
+        message={deleteModal.message}
+        type={deleteModal.type === 'tracking_permanent' || deleteModal.type === 'user' ? 'danger' : 'warning'}
+      />
     </div>
   );
 }
